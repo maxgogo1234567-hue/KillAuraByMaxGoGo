@@ -231,4 +231,133 @@ Watermark.BackgroundTransparency = 1
 Watermark.Text                   = "MadeBy:MaxGoGo"
 Watermark.Font                   = Enum.Font.GothamBold
 Watermark.TextSize               = 13
-Watermark.TextXAlignment
+Watermark.TextXAlignment         = Enum.TextXAlignment.Center
+Watermark.ZIndex                 = 11
+Watermark.Parent                 = WMFrame
+
+RunService.Heartbeat:Connect(function()
+    local col = Color3.fromHSV((tick() * 0.3) % 1, 1, 1)
+    Watermark.TextColor3 = col
+    WMStroke.Color       = col
+
+    -- обновляем статус capture label
+    if hookActive and capturedRemote then
+        CaptureLabel.Text      = "Hook:  " .. capturedRemote.Name .. " ✓"
+        CaptureLabel.TextColor3 = Color3.fromRGB(80, 220, 100)
+    end
+end)
+
+-- ── TOGGLE ───────────────────────────────────────────────────────────────────
+
+local function SetState(on)
+    Cfg.Enabled = on
+    if on then
+        StatusLabel.Text       = "Status:  ON"
+        StatusLabel.TextColor3 = Color3.fromRGB(80, 220, 100)
+        ToggleBtn.Text         = "Disable"
+        TweenService:Create(ToggleBtn, TweenInfo.new(0.15), {
+            BackgroundColor3 = Color3.fromRGB(50, 180, 80)
+        }):Play()
+        BtnStroke.Color = Color3.fromRGB(50, 180, 80)
+
+        -- при включении пробуем найти remote по имени как быстрый старт
+        if not capturedRemote then
+            local found = FindRemoteByKeyword()
+            if found then
+                capturedRemote = found
+                hookActive     = true
+                -- generic builder: пробуем char/hum/hrp
+                capturedBuilder = function(targetPlayer)
+                    local tChar = targetPlayer.Character
+                    if not tChar then return nil end
+                    local tHum = tChar:FindFirstChild("Humanoid")
+                    local tHRP = tChar:FindFirstChild("HumanoidRootPart")
+                    if not tHum or tHum.Health <= 0 then return nil end
+                    return {tChar, tHum, tHRP}
+                end
+            end
+        end
+    else
+        StatusLabel.Text       = "Status:  OFF"
+        StatusLabel.TextColor3 = Color3.fromRGB(200, 70, 70)
+        ToggleBtn.Text         = "Enable"
+        TweenService:Create(ToggleBtn, TweenInfo.new(0.15), {
+            BackgroundColor3 = Color3.fromRGB(40, 40, 58)
+        }):Play()
+        BtnStroke.Color = Color3.fromRGB(100, 100, 140)
+    end
+end
+
+ToggleBtn.MouseButton1Click:Connect(function()
+    SetState(not Cfg.Enabled)
+end)
+
+-- ── TOOL ─────────────────────────────────────────────────────────────────────
+
+local function GetMeleeTool()
+    if not Char then return nil end
+    for _, obj in ipairs(Char:GetChildren()) do
+        if obj:IsA("Tool") then
+            local ranged = obj:FindFirstChild("ShootEvent")
+                or obj:FindFirstChild("BulletEvent")
+                or obj:FindFirstChild("FireRemote")
+            if not ranged then return obj end
+        end
+    end
+    return nil
+end
+
+-- ── ATTACK ───────────────────────────────────────────────────────────────────
+
+local function Attack(tool, target)
+    local tChar = target.Character
+    if not tChar then return end
+    local tHum = tChar:FindFirstChild("Humanoid")
+    if not tHum or tHum.Health <= 0 then return end
+
+    -- анимация swing (только визуал, не двигает персонажа)
+    pcall(function() tool:Activate() end)
+
+    -- 1. captured remote — самый надёжный путь
+    if capturedRemote and capturedBuilder then
+        local args = capturedBuilder(target)
+        if args then
+            pcall(function() capturedRemote:FireServer(table.unpack(args)) end)
+        end
+        return
+    end
+
+    -- 2. fallback: все remotes в tool с популярными сигнатурами
+    for _, re in ipairs(tool:GetDescendants()) do
+        if re:IsA("RemoteEvent") then
+            pcall(function() re:FireServer(tChar) end)
+            pcall(function() re:FireServer(tHum) end)
+            pcall(function() re:FireServer(tChar, tHum) end)
+            pcall(function() re:FireServer(tHum, tChar) end)
+        end
+        if re:IsA("RemoteFunction") then
+            pcall(function() re:InvokeServer(tChar) end)
+        end
+    end
+end
+
+-- ── MAIN LOOP ────────────────────────────────────────────────────────────────
+
+task.spawn(function()
+    while true do
+        task.wait(Cfg.Delay)
+        if Cfg.Enabled and Char then
+            local myHum = Char:FindFirstChild("Humanoid")
+            if myHum and myHum.Health > 0 then
+                local tool = GetMeleeTool()
+                if tool then
+                    for _, plr in ipairs(Players:GetPlayers()) do
+                        if plr ~= LP then
+                            pcall(Attack, tool, plr)
+                        end
+                    end
+                end
+            end
+        end
+    end
+end)
