@@ -1,5 +1,5 @@
--- language: Lua, file: KillAura_v3.lua, target: Roblox Executor (Synapse X / KRNL / Fluxus)
--- real blade teleport technique — Handle.CFrame replicates to server, fires Touched server-side
+-- language: Lua, file: KillAura_v4.lua, target: Synapse X / KRNL / Fluxus / Solara
+-- firetouchinterest — реальный server-side touch без телепорта
 
 local Players      = game:GetService("Players")
 local RunService   = game:GetService("RunService")
@@ -9,7 +9,7 @@ local LP   = Players.LocalPlayer
 local PGui = LP:WaitForChild("PlayerGui")
 
 local Cfg = {
-    Delay   = 0.08,
+    Delay   = 0.1,
     Enabled = false,
 }
 
@@ -83,7 +83,7 @@ local InfoLabel = Instance.new("TextLabel")
 InfoLabel.Size                   = UDim2.new(1, -20, 0, 20)
 InfoLabel.Position               = UDim2.new(0, 10, 0, 72)
 InfoLabel.BackgroundTransparency = 1
-InfoLabel.Text                   = "Mode:  Blade Teleport"
+InfoLabel.Text                   = "Mode:  Server Touch"
 InfoLabel.TextColor3             = Color3.fromRGB(130, 130, 160)
 InfoLabel.Font                   = Enum.Font.Gotham
 InfoLabel.TextSize               = 12
@@ -106,36 +106,33 @@ local BtnStroke = Instance.new("UIStroke", ToggleBtn)
 BtnStroke.Color     = Color3.fromRGB(100, 100, 140)
 BtnStroke.Thickness = 1
 
--- ── WATERMARK — bottom right, rainbow ────────────────────────────────────────
+-- ── WATERMARK ────────────────────────────────────────────────────────────────
 
 local WMFrame = Instance.new("Frame")
-WMFrame.Size                   = UDim2.new(0, 220, 0, 28)
-WMFrame.Position               = UDim2.new(1, -228, 1, -34)
+WMFrame.Size                   = UDim2.new(0, 210, 0, 28)
+WMFrame.Position               = UDim2.new(1, -218, 1, -34)
 WMFrame.BackgroundColor3       = Color3.fromRGB(10, 10, 18)
-WMFrame.BackgroundTransparency = 0.35
+WMFrame.BackgroundTransparency = 0.3
 WMFrame.BorderSizePixel        = 0
 WMFrame.ZIndex                 = 10
 WMFrame.Parent                 = SG
 Instance.new("UICorner", WMFrame).CornerRadius = UDim.new(0, 6)
 
 local WMStroke = Instance.new("UIStroke", WMFrame)
-WMStroke.Thickness = 1
+WMStroke.Thickness = 1.2
 
 local Watermark = Instance.new("TextLabel")
-Watermark.Size                   = UDim2.new(1, -10, 1, 0)
-Watermark.Position               = UDim2.new(0, 0, 0, 0)
+Watermark.Size                   = UDim2.new(1, 0, 1, 0)
 Watermark.BackgroundTransparency = 1
-Watermark.Text                   = "MadeBy:MaxGoGo"
+Watermark.Text                   = "MadeBy:MaxGoGo]"
 Watermark.Font                   = Enum.Font.GothamBold
 Watermark.TextSize               = 13
 Watermark.TextXAlignment         = Enum.TextXAlignment.Center
 Watermark.ZIndex                 = 11
 Watermark.Parent                 = WMFrame
 
--- rainbow cycle
 RunService.Heartbeat:Connect(function()
-    local h = (tick() * 0.3) % 1
-    local col = Color3.fromHSV(h, 1, 1)
+    local col = Color3.fromHSV((tick() * 0.3) % 1, 1, 1)
     Watermark.TextColor3 = col
     WMStroke.Color       = col
 end)
@@ -182,67 +179,55 @@ local function GetMeleeTool()
     return nil
 end
 
--- вернёт Handle или первый BasePart инструмента
 local function GetBlade(tool)
     return tool:FindFirstChild("Handle")
         or tool:FindFirstChildWhichIsA("BasePart")
 end
 
--- ── ATTACK ───────────────────────────────────────────────────────────────────
+-- ── ATTACK — firetouchinterest ────────────────────────────────────────────────
 --
--- Принцип: когда инструмент экипирован, его части network-owned клиентом.
--- Значит Handle.CFrame, изменённый на клиенте, реплицируется на СЕРВЕР.
--- Сервер видит Handle внутри hitbox цели → его Touched-коннекции срабатывают
--- → игра наносит урон своим же кодом. Никаких remotes вслепую.
+-- firetouchinterest(part_a, part_b, 0) — сервер получает Touched между part_a и part_b
+-- firetouchinterest(part_a, part_b, 1) — TouchEnded
+-- Это executor API (Synapse/KRNL/Fluxus) — реально реплицирует touch на сервер.
+-- Никакого движения персонажа, никакого визуального артефакта.
 --
-
-local attacking = false  -- guard против overlap
 
 local function Attack(tool, target)
-    if attacking then return end
     local tChar = target.Character
     if not tChar then return end
     local tHum = tChar:FindFirstChild("Humanoid")
-    local tHRP = tChar:FindFirstChild("HumanoidRootPart")
-    if not tHum or tHum.Health <= 0 or not tHRP then return end
+    if not tHum or tHum.Health <= 0 then return end
 
     local blade = GetBlade(tool)
     if not blade then return end
 
-    attacking = true
-
-    -- 1. активируем анимацию/клиентский скрипт инструмента
+    -- активируем анимацию swing
     pcall(function() tool:Activate() end)
 
-    -- 2. сохраняем оригинальный CFrame
-    local origin = blade.CFrame
-
-    -- 3. телепортируем blade внутрь hitbox цели
-    --    небольшой оффсет чтобы гарантированно попасть в Torso/HRP
-    blade.CFrame = tHRP.CFrame * CFrame.new(0, 0, 0.5)
-
-    -- 4. ждём один physics step — сервер обработает Touched
-    task.wait()
-
-    -- 5. возвращаем blade на место
-    blade.CFrame = origin
-
-    -- 6. fallback: стреляем remotes с правильными аргументами
-    pcall(function()
-        for _, re in ipairs(tool:GetDescendants()) do
-            if re:IsA("RemoteEvent") then
-                pcall(function() re:FireServer(tChar) end)
-                pcall(function() re:FireServer(tHum) end)
-                pcall(function() re:FireServer(tHRP) end)
-                pcall(function() re:FireServer(tHRP.Position) end)
-            end
+    -- firetouchinterest по каждой части тела цели
+    for _, part in ipairs(tChar:GetChildren()) do
+        if part:IsA("BasePart") then
+            pcall(function()
+                firetouchinterest(blade, part, 0)  -- Touched
+            end)
+            pcall(function()
+                firetouchinterest(blade, part, 1)  -- TouchEnded
+            end)
         end
-    end)
+    end
 
-    -- 7. client-side TakeDamage (для игр без server validation)
-    pcall(function() tHum:TakeDamage(25) end)
-
-    attacking = false
+    -- remote fallback для игр с RemoteEvent-based damage
+    for _, re in ipairs(tool:GetDescendants()) do
+        if re:IsA("RemoteEvent") then
+            pcall(function() re:FireServer(tChar) end)
+            pcall(function() re:FireServer(tHum) end)
+            pcall(function() re:FireServer(tHum, tChar) end)
+        end
+        if re:IsA("RemoteFunction") then
+            pcall(function() re:InvokeServer(tChar) end)
+        end
+    end
+    -- НЕТ TakeDamage — он только визуальный на клиенте
 end
 
 -- ── MAIN LOOP ────────────────────────────────────────────────────────────────
