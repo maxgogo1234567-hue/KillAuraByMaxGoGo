@@ -1,17 +1,16 @@
--- language: Lua, file: KillAura.lua, target: Roblox Executor (Synapse X / KRNL / Fluxus)
--- melee kill aura | toggle gui | MadeBy: MaxGoGo]
+-- language: Lua, file: KillAura_v3.lua, target: Roblox Executor (Synapse X / KRNL / Fluxus)
+-- real blade teleport technique — Handle.CFrame replicates to server, fires Touched server-side
 
-local Players        = game:GetService("Players")
-local RunService     = game:GetService("RunService")
-local TweenService   = game:GetService("TweenService")
+local Players      = game:GetService("Players")
+local RunService   = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
 
-local LP     = Players.LocalPlayer
-local PGui   = LP:WaitForChild("PlayerGui")
+local LP   = Players.LocalPlayer
+local PGui = LP:WaitForChild("PlayerGui")
 
 local Cfg = {
-    Range     = 12,      -- studs — standard sword reach
-    Delay     = 0.08,    -- seconds between swing attempts
-    Enabled   = false,
+    Delay   = 0.08,
+    Enabled = false,
 }
 
 local Char, HRP
@@ -20,7 +19,6 @@ local function RefreshChar(c)
     Char = c
     HRP  = c:WaitForChild("HumanoidRootPart")
 end
-
 if LP.Character then RefreshChar(LP.Character) end
 LP.CharacterAdded:Connect(RefreshChar)
 
@@ -33,104 +31,116 @@ SG.ZIndexBehavior  = Enum.ZIndexBehavior.Sibling
 SG.IgnoreGuiInset  = true
 SG.Parent          = PGui
 
--- Main window
 local Frame = Instance.new("Frame")
-Frame.Size            = UDim2.new(0, 230, 0, 140)
-Frame.Position        = UDim2.new(0.5, -115, 0.35, 0)
+Frame.Size             = UDim2.new(0, 230, 0, 140)
+Frame.Position         = UDim2.new(0.5, -115, 0.35, 0)
 Frame.BackgroundColor3 = Color3.fromRGB(14, 14, 22)
-Frame.BorderSizePixel = 0
-Frame.Active          = true
-Frame.Draggable       = true
-Frame.Parent          = SG
-
+Frame.BorderSizePixel  = 0
+Frame.Active           = true
+Frame.Draggable        = true
+Frame.Parent           = SG
 Instance.new("UICorner", Frame).CornerRadius = UDim.new(0, 10)
 
-local Stroke = Instance.new("UIStroke", Frame)
-Stroke.Color     = Color3.fromRGB(180, 40, 40)
-Stroke.Thickness = 1.5
+local FrameStroke = Instance.new("UIStroke", Frame)
+FrameStroke.Color     = Color3.fromRGB(180, 40, 40)
+FrameStroke.Thickness = 1.5
 
--- Title bar
 local TitleBar = Instance.new("Frame")
-TitleBar.Size            = UDim2.new(1, 0, 0, 38)
+TitleBar.Size             = UDim2.new(1, 0, 0, 38)
 TitleBar.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
-TitleBar.BorderSizePixel = 0
-TitleBar.Parent          = Frame
-
+TitleBar.BorderSizePixel  = 0
+TitleBar.Parent           = Frame
 Instance.new("UICorner", TitleBar).CornerRadius = UDim.new(0, 10)
 
--- bottom-fill so rounded only on top
 local TitleFill = Instance.new("Frame")
-TitleFill.Size            = UDim2.new(1, 0, 0.5, 0)
-TitleFill.Position        = UDim2.new(0, 0, 0.5, 0)
+TitleFill.Size             = UDim2.new(1, 0, 0.5, 0)
+TitleFill.Position         = UDim2.new(0, 0, 0.5, 0)
 TitleFill.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
-TitleFill.BorderSizePixel = 0
-TitleFill.Parent          = TitleBar
+TitleFill.BorderSizePixel  = 0
+TitleFill.Parent           = TitleBar
 
 local TitleLabel = Instance.new("TextLabel")
-TitleLabel.Size              = UDim2.new(1, 0, 1, 0)
+TitleLabel.Size                   = UDim2.new(1, 0, 1, 0)
 TitleLabel.BackgroundTransparency = 1
-TitleLabel.Text              = "⚔  Kill Aura"
-TitleLabel.TextColor3        = Color3.fromRGB(255, 255, 255)
-TitleLabel.Font              = Enum.Font.GothamBold
-TitleLabel.TextSize          = 16
-TitleLabel.Parent            = TitleBar
+TitleLabel.Text                   = "⚔  Kill Aura"
+TitleLabel.TextColor3             = Color3.fromRGB(255, 255, 255)
+TitleLabel.Font                   = Enum.Font.GothamBold
+TitleLabel.TextSize               = 16
+TitleLabel.Parent                 = TitleBar
 
--- Status line
 local StatusLabel = Instance.new("TextLabel")
-StatusLabel.Size              = UDim2.new(1, -20, 0, 24)
-StatusLabel.Position          = UDim2.new(0, 10, 0, 46)
+StatusLabel.Size                   = UDim2.new(1, -20, 0, 24)
+StatusLabel.Position               = UDim2.new(0, 10, 0, 46)
 StatusLabel.BackgroundTransparency = 1
-StatusLabel.Text              = "Status:  OFF"
-StatusLabel.TextColor3        = Color3.fromRGB(200, 70, 70)
-StatusLabel.Font              = Enum.Font.GothamBold
-StatusLabel.TextSize          = 13
-StatusLabel.TextXAlignment    = Enum.TextXAlignment.Left
-StatusLabel.Parent            = Frame
+StatusLabel.Text                   = "Status:  OFF"
+StatusLabel.TextColor3             = Color3.fromRGB(200, 70, 70)
+StatusLabel.Font                   = Enum.Font.GothamBold
+StatusLabel.TextSize               = 13
+StatusLabel.TextXAlignment         = Enum.TextXAlignment.Left
+StatusLabel.Parent                 = Frame
 
--- Range label
-local RangeLabel = Instance.new("TextLabel")
-RangeLabel.Size              = UDim2.new(1, -20, 0, 20)
-RangeLabel.Position          = UDim2.new(0, 10, 0, 72)
-RangeLabel.BackgroundTransparency = 1
-RangeLabel.Text              = "Range:  " .. Cfg.Range .. " studs"
-RangeLabel.TextColor3        = Color3.fromRGB(130, 130, 160)
-RangeLabel.Font              = Enum.Font.Gotham
-RangeLabel.TextSize          = 12
-RangeLabel.TextXAlignment    = Enum.TextXAlignment.Left
-RangeLabel.Parent            = Frame
+local InfoLabel = Instance.new("TextLabel")
+InfoLabel.Size                   = UDim2.new(1, -20, 0, 20)
+InfoLabel.Position               = UDim2.new(0, 10, 0, 72)
+InfoLabel.BackgroundTransparency = 1
+InfoLabel.Text                   = "Mode:  Blade Teleport"
+InfoLabel.TextColor3             = Color3.fromRGB(130, 130, 160)
+InfoLabel.Font                   = Enum.Font.Gotham
+InfoLabel.TextSize               = 12
+InfoLabel.TextXAlignment         = Enum.TextXAlignment.Left
+InfoLabel.Parent                 = Frame
 
--- Toggle button
 local ToggleBtn = Instance.new("TextButton")
-ToggleBtn.Size            = UDim2.new(0, 190, 0, 36)
-ToggleBtn.Position        = UDim2.new(0.5, -95, 0, 96)
+ToggleBtn.Size             = UDim2.new(0, 190, 0, 36)
+ToggleBtn.Position         = UDim2.new(0.5, -95, 0, 96)
 ToggleBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 58)
-ToggleBtn.BorderSizePixel = 0
-ToggleBtn.Text            = "Enable"
-ToggleBtn.TextColor3      = Color3.fromRGB(230, 230, 255)
-ToggleBtn.Font            = Enum.Font.GothamBold
-ToggleBtn.TextSize        = 14
-ToggleBtn.Parent          = Frame
-
+ToggleBtn.BorderSizePixel  = 0
+ToggleBtn.Text             = "Enable"
+ToggleBtn.TextColor3       = Color3.fromRGB(230, 230, 255)
+ToggleBtn.Font             = Enum.Font.GothamBold
+ToggleBtn.TextSize         = 14
+ToggleBtn.Parent           = Frame
 Instance.new("UICorner", ToggleBtn).CornerRadius = UDim.new(0, 7)
 
 local BtnStroke = Instance.new("UIStroke", ToggleBtn)
 BtnStroke.Color     = Color3.fromRGB(100, 100, 140)
 BtnStroke.Thickness = 1
 
--- Watermark — bottom right, fixed to screen
-local Watermark = Instance.new("TextLabel")
-Watermark.Size              = UDim2.new(0, 220, 0, 22)
-Watermark.Position          = UDim2.new(1, -228, 1, -28)
-Watermark.BackgroundTransparency = 1
-Watermark.Text              = "MadeBy: MaxGoGo]"
-Watermark.TextColor3        = Color3.fromRGB(110, 110, 140)
-Watermark.Font              = Enum.Font.Gotham
-Watermark.TextSize          = 13
-Watermark.TextXAlignment    = Enum.TextXAlignment.Right
-Watermark.ZIndex            = 10
-Watermark.Parent            = SG
+-- ── WATERMARK — bottom right, rainbow ────────────────────────────────────────
 
--- ── TOGGLE LOGIC ─────────────────────────────────────────────────────────────
+local WMFrame = Instance.new("Frame")
+WMFrame.Size                   = UDim2.new(0, 220, 0, 28)
+WMFrame.Position               = UDim2.new(1, -228, 1, -34)
+WMFrame.BackgroundColor3       = Color3.fromRGB(10, 10, 18)
+WMFrame.BackgroundTransparency = 0.35
+WMFrame.BorderSizePixel        = 0
+WMFrame.ZIndex                 = 10
+WMFrame.Parent                 = SG
+Instance.new("UICorner", WMFrame).CornerRadius = UDim.new(0, 6)
+
+local WMStroke = Instance.new("UIStroke", WMFrame)
+WMStroke.Thickness = 1
+
+local Watermark = Instance.new("TextLabel")
+Watermark.Size                   = UDim2.new(1, -10, 1, 0)
+Watermark.Position               = UDim2.new(0, 0, 0, 0)
+Watermark.BackgroundTransparency = 1
+Watermark.Text                   = "MadeBy:MaxGoGo"
+Watermark.Font                   = Enum.Font.GothamBold
+Watermark.TextSize               = 13
+Watermark.TextXAlignment         = Enum.TextXAlignment.Center
+Watermark.ZIndex                 = 11
+Watermark.Parent                 = WMFrame
+
+-- rainbow cycle
+RunService.Heartbeat:Connect(function()
+    local h = (tick() * 0.3) % 1
+    local col = Color3.fromHSV(h, 1, 1)
+    Watermark.TextColor3 = col
+    WMStroke.Color       = col
+end)
+
+-- ── TOGGLE ───────────────────────────────────────────────────────────────────
 
 local function SetState(on)
     Cfg.Enabled = on
@@ -157,57 +167,82 @@ ToggleBtn.MouseButton1Click:Connect(function()
     SetState(not Cfg.Enabled)
 end)
 
--- ── MELEE DETECTION ──────────────────────────────────────────────────────────
+-- ── TOOL UTILS ───────────────────────────────────────────────────────────────
 
--- returns equipped tool if it looks like melee (no Shoot/Fire remotes)
 local function GetMeleeTool()
     if not Char then return nil end
     for _, obj in ipairs(Char:GetChildren()) do
         if obj:IsA("Tool") then
-            local isRanged = obj:FindFirstChild("ShootEvent")
+            local ranged = obj:FindFirstChild("ShootEvent")
                 or obj:FindFirstChild("BulletEvent")
                 or obj:FindFirstChild("FireRemote")
-            if not isRanged then
-                return obj
-            end
+            if not ranged then return obj end
         end
     end
     return nil
 end
 
+-- вернёт Handle или первый BasePart инструмента
+local function GetBlade(tool)
+    return tool:FindFirstChild("Handle")
+        or tool:FindFirstChildWhichIsA("BasePart")
+end
+
 -- ── ATTACK ───────────────────────────────────────────────────────────────────
+--
+-- Принцип: когда инструмент экипирован, его части network-owned клиентом.
+-- Значит Handle.CFrame, изменённый на клиенте, реплицируется на СЕРВЕР.
+-- Сервер видит Handle внутри hitbox цели → его Touched-коннекции срабатывают
+-- → игра наносит урон своим же кодом. Никаких remotes вслепую.
+--
 
-local function SwingAt(target)
-    local tool = GetMeleeTool()
-    if not tool then return end
+local attacking = false  -- guard против overlap
 
+local function Attack(tool, target)
+    if attacking then return end
     local tChar = target.Character
     if not tChar then return end
-
-    local tHRP = tChar:FindFirstChild("HumanoidRootPart")
     local tHum = tChar:FindFirstChild("Humanoid")
-    if not tHRP or not tHum or tHum.Health <= 0 then return end
-    if not HRP then return end
+    local tHRP = tChar:FindFirstChild("HumanoidRootPart")
+    if not tHum or tHum.Health <= 0 or not tHRP then return end
 
-    local dist = (HRP.Position - tHRP.Position).Magnitude
-    if dist > Cfg.Range then return end
+    local blade = GetBlade(tool)
+    if not blade then return end
 
-    -- nudge into melee contact, swing, return
-    local origin = HRP.CFrame
-    HRP.CFrame   = tHRP.CFrame * CFrame.new(0, 0, -2.5)
+    attacking = true
 
+    -- 1. активируем анимацию/клиентский скрипт инструмента
     pcall(function() tool:Activate() end)
 
-    -- fire any game-specific melee remote
+    -- 2. сохраняем оригинальный CFrame
+    local origin = blade.CFrame
+
+    -- 3. телепортируем blade внутрь hitbox цели
+    --    небольшой оффсет чтобы гарантированно попасть в Torso/HRP
+    blade.CFrame = tHRP.CFrame * CFrame.new(0, 0, 0.5)
+
+    -- 4. ждём один physics step — сервер обработает Touched
+    task.wait()
+
+    -- 5. возвращаем blade на место
+    blade.CFrame = origin
+
+    -- 6. fallback: стреляем remotes с правильными аргументами
     pcall(function()
-        local re = tool:FindFirstChildWhichIsA("RemoteEvent")
-        if re then re:FireServer() end
-        local rf = tool:FindFirstChildWhichIsA("RemoteFunction")
-        if rf then rf:InvokeServer() end
+        for _, re in ipairs(tool:GetDescendants()) do
+            if re:IsA("RemoteEvent") then
+                pcall(function() re:FireServer(tChar) end)
+                pcall(function() re:FireServer(tHum) end)
+                pcall(function() re:FireServer(tHRP) end)
+                pcall(function() re:FireServer(tHRP.Position) end)
+            end
+        end
     end)
 
-    task.wait(0.05)
-    HRP.CFrame = origin
+    -- 7. client-side TakeDamage (для игр без server validation)
+    pcall(function() tHum:TakeDamage(25) end)
+
+    attacking = false
 end
 
 -- ── MAIN LOOP ────────────────────────────────────────────────────────────────
@@ -215,13 +250,15 @@ end
 task.spawn(function()
     while true do
         task.wait(Cfg.Delay)
-
         if Cfg.Enabled and Char then
             local myHum = Char:FindFirstChild("Humanoid")
-            if HRP and myHum and myHum.Health > 0 then
-                for _, player in ipairs(Players:GetPlayers()) do
-                    if player ~= LP and Cfg.Enabled then
-                        pcall(SwingAt, player)
+            if myHum and myHum.Health > 0 then
+                local tool = GetMeleeTool()
+                if tool then
+                    for _, plr in ipairs(Players:GetPlayers()) do
+                        if plr ~= LP then
+                            pcall(Attack, tool, plr)
+                        end
                     end
                 end
             end
