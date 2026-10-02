@@ -1,5 +1,7 @@
--- language: Lua, file: KillAura_v6.lua, target: Synapse X / KRNL / Fluxus / Solara
--- hookmetamethod __namecall — перехват damage remote при первом ударе, replay на всех
+-- language: Lua, file: KillAura_v9.lua, target: Synapse X / KRNL / Fluxus / Solara
+-- hitbox expander: HRP.Size → огромный, game's own Touched fires damage
+
+local ok, err = pcall(function()
 
 local Players      = game:GetService("Players")
 local RunService   = game:GetService("RunService")
@@ -9,110 +11,115 @@ local LP   = Players.LocalPlayer
 local PGui = LP:WaitForChild("PlayerGui")
 
 local Cfg = {
-    Delay   = 0.12,
-    Enabled = false,
+    Enabled     = false,
+    HitboxSize  = 40,       -- studs во все стороны
+    Transparent = true,     -- скрыть расширенный хитбокс визуально
 }
 
-local Char, HRP
-local capturedRemote  = nil   -- RemoteEvent пойманный при ударе
-local capturedBuilder = nil   -- function(targetPlayer) → {args}
-local hookActive      = false
+-- хранилище оригинальных размеров
+local originals = {}  -- [player] = {hrp = Vector3, parts = {[part] = Vector3}}
 
-local function RefreshChar(c)
-    Char = c
-    HRP  = c:WaitForChild("HumanoidRootPart")
-end
-if LP.Character then RefreshChar(LP.Character) end
-LP.CharacterAdded:Connect(RefreshChar)
+-- ── EXPAND / RESTORE ─────────────────────────────────────────────────────────
 
--- ── ARG BUILDER ──────────────────────────────────────────────────────────────
--- строит таблицу аргументов для нового target
--- заменяет любой Instance из вражеского Character на соответствующий из target
+local function ExpandPlayer(plr)
+    if plr == LP then return end
+    local char = plr.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    if originals[plr] then return end  -- уже расширен
 
-local function MakeBuilder(originalArgs, sourceChar)
-    return function(targetPlayer)
-        local tChar = targetPlayer.Character
-        if not tChar then return nil end
-        local tHum = tChar:FindFirstChild("Humanoid")
-        local tHRP = tChar:FindFirstChild("HumanoidRootPart")
-        if not tHum or tHum.Health <= 0 or not tHRP then return nil end
+    local saved = { hrp = hrp.Size, parts = {} }
 
-        local built = {}
-        for i, v in ipairs(originalArgs) do
-            local t = typeof(v)
-            if t == "Instance" then
-                if v == sourceChar then
-                    built[i] = tChar
-                elseif v.Parent == sourceChar then
-                    built[i] = tChar:FindFirstChild(v.Name) or tHRP
-                else
-                    built[i] = v
-                end
-            elseif t == "Vector3" then
-                built[i] = tHRP.Position
-            elseif t == "CFrame" then
-                built[i] = tHRP.CFrame
-            else
-                built[i] = v
-            end
+    -- расширяем HRP
+    pcall(function()
+        saved.hrp = hrp.Size
+        hrp.Size  = Vector3.new(Cfg.HitboxSize, Cfg.HitboxSize, Cfg.HitboxSize)
+        if Cfg.Transparent then
+            hrp.LocalTransparencyModifier = 1
         end
-        return built
+    end)
+
+    -- расширяем все остальные BasePart для максимального покрытия
+    for _, part in ipairs(char:GetChildren()) do
+        if part:IsA("BasePart") and part ~= hrp then
+            pcall(function()
+                saved.parts[part] = part.Size
+                local s = Cfg.HitboxSize * 0.6
+                part.Size = Vector3.new(s, s, s)
+                if Cfg.Transparent then
+                    part.LocalTransparencyModifier = 1
+                end
+            end)
+        end
+    end
+
+    originals[plr] = saved
+end
+
+local function RestorePlayer(plr)
+    local char = plr.Character
+    local saved = originals[plr]
+    if not saved then return end
+
+    if char then
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            pcall(function()
+                hrp.Size = saved.hrp
+                hrp.LocalTransparencyModifier = 0
+            end)
+        end
+        for part, sz in pairs(saved.parts) do
+            pcall(function()
+                part.Size = sz
+                part.LocalTransparencyModifier = 0
+            end)
+        end
+    end
+
+    originals[plr] = nil
+end
+
+local function ExpandAll()
+    for _, plr in ipairs(Players:GetPlayers()) do
+        pcall(ExpandPlayer, plr)
     end
 end
 
--- ── HOOKMETAMETHOD — перехват FireServer ──────────────────────────────────────
--- срабатывает при каждом RemoteEvent:FireServer в игре
--- ищет в args Instance принадлежащую enemy Character → это damage remote
+local function RestoreAll()
+    for plr, _ in pairs(originals) do
+        pcall(RestorePlayer, plr)
+    end
+    originals = {}
+end
 
-pcall(function()
-    local oldNamecall
-    oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
-        local method = getnamecallmethod()
-
-        if method == "FireServer" and self:IsA("RemoteEvent") then
-            local args = {...}
-            for _, v in ipairs(args) do
-                if typeof(v) == "Instance" then
-                    for _, plr in ipairs(Players:GetPlayers()) do
-                        if plr ~= LP and plr.Character then
-                            if v == plr.Character or v.Parent == plr.Character then
-                                -- поймали damage remote
-                                capturedRemote  = self
-                                capturedBuilder = MakeBuilder(args, plr.Character)
-                                hookActive      = true
-                                break
-                            end
-                        end
-                    end
-                end
-            end
+-- при новом персонаже игрока — расширяем снова если включено
+Players.PlayerAdded:Connect(function(plr)
+    plr.CharacterAdded:Connect(function()
+        task.wait(0.5)
+        if Cfg.Enabled then
+            pcall(ExpandPlayer, plr)
         end
-
-        return oldNamecall(self, ...)
     end)
 end)
 
--- ── FALLBACK — поиск damage remote по имени ───────────────────────────────────
--- используется если hookmetamethod не поддерживается executor'ом
-
-local function FindRemoteByKeyword()
-    local kw = {
-        "damage","hit","attack","strike","hurt","slash",
-        "stab","sword","knife","melee","swing","smash"
-    }
-    local function scan(root)
-        for _, obj in ipairs(root:GetDescendants()) do
-            if obj:IsA("RemoteEvent") then
-                local name = obj.Name:lower()
-                for _, k in ipairs(kw) do
-                    if name:find(k) then return obj end
-                end
+-- для уже существующих игроков подписываемся на respawn
+for _, plr in ipairs(Players:GetPlayers()) do
+    if plr ~= LP then
+        plr.CharacterAdded:Connect(function()
+            task.wait(0.5)
+            if Cfg.Enabled then
+                originals[plr] = nil  -- сброс чтобы ExpandPlayer не скипнул
+                pcall(ExpandPlayer, plr)
             end
-        end
+        end)
     end
-    return scan(game:GetService("ReplicatedStorage"))
-        or scan(workspace)
 end
+
+Players.PlayerRemoving:Connect(function(plr)
+    originals[plr] = nil
+end)
 
 -- ── GUI ──────────────────────────────────────────────────────────────────────
 
@@ -171,28 +178,27 @@ StatusLabel.TextSize               = 13
 StatusLabel.TextXAlignment         = Enum.TextXAlignment.Left
 StatusLabel.Parent                 = Frame
 
--- статус захвата remote
-local CaptureLabel = Instance.new("TextLabel")
-CaptureLabel.Size                   = UDim2.new(1, -20, 0, 18)
-CaptureLabel.Position               = UDim2.new(0, 10, 0, 72)
-CaptureLabel.BackgroundTransparency = 1
-CaptureLabel.Text                   = "Hook:  ожидает удара..."
-CaptureLabel.TextColor3             = Color3.fromRGB(160, 130, 50)
-CaptureLabel.Font                   = Enum.Font.Gotham
-CaptureLabel.TextSize               = 11
-CaptureLabel.TextXAlignment         = Enum.TextXAlignment.Left
-CaptureLabel.Parent                 = Frame
+local InfoLabel = Instance.new("TextLabel")
+InfoLabel.Size                   = UDim2.new(1, -20, 0, 18)
+InfoLabel.Position               = UDim2.new(0, 10, 0, 73)
+InfoLabel.BackgroundTransparency = 1
+InfoLabel.Text                   = "Mode:  Hitbox Expander"
+InfoLabel.TextColor3             = Color3.fromRGB(130, 130, 160)
+InfoLabel.Font                   = Enum.Font.Gotham
+InfoLabel.TextSize               = 11
+InfoLabel.TextXAlignment         = Enum.TextXAlignment.Left
+InfoLabel.Parent                 = Frame
 
-local ModeLabel = Instance.new("TextLabel")
-ModeLabel.Size                   = UDim2.new(1, -20, 0, 16)
-ModeLabel.Position               = UDim2.new(0, 10, 0, 92)
-ModeLabel.BackgroundTransparency = 1
-ModeLabel.Text                   = "Mode:  Remote Capture"
-ModeLabel.TextColor3             = Color3.fromRGB(130, 130, 160)
-ModeLabel.Font                   = Enum.Font.Gotham
-ModeLabel.TextSize               = 11
-ModeLabel.TextXAlignment         = Enum.TextXAlignment.Left
-ModeLabel.Parent                 = Frame
+local SizeLabel = Instance.new("TextLabel")
+SizeLabel.Size                   = UDim2.new(1, -20, 0, 16)
+SizeLabel.Position               = UDim2.new(0, 10, 0, 93)
+SizeLabel.BackgroundTransparency = 1
+SizeLabel.Text                   = "HitboxSize:  " .. Cfg.HitboxSize .. " studs"
+SizeLabel.TextColor3             = Color3.fromRGB(100, 100, 130)
+SizeLabel.Font                   = Enum.Font.Gotham
+SizeLabel.TextSize               = 11
+SizeLabel.TextXAlignment         = Enum.TextXAlignment.Left
+SizeLabel.Parent                 = Frame
 
 local ToggleBtn = Instance.new("TextButton")
 ToggleBtn.Size             = UDim2.new(0, 190, 0, 36)
@@ -239,12 +245,6 @@ RunService.Heartbeat:Connect(function()
     local col = Color3.fromHSV((tick() * 0.3) % 1, 1, 1)
     Watermark.TextColor3 = col
     WMStroke.Color       = col
-
-    -- обновляем статус capture label
-    if hookActive and capturedRemote then
-        CaptureLabel.Text      = "Hook:  " .. capturedRemote.Name .. " ✓"
-        CaptureLabel.TextColor3 = Color3.fromRGB(80, 220, 100)
-    end
 end)
 
 -- ── TOGGLE ───────────────────────────────────────────────────────────────────
@@ -259,24 +259,7 @@ local function SetState(on)
             BackgroundColor3 = Color3.fromRGB(50, 180, 80)
         }):Play()
         BtnStroke.Color = Color3.fromRGB(50, 180, 80)
-
-        -- при включении пробуем найти remote по имени как быстрый старт
-        if not capturedRemote then
-            local found = FindRemoteByKeyword()
-            if found then
-                capturedRemote = found
-                hookActive     = true
-                -- generic builder: пробуем char/hum/hrp
-                capturedBuilder = function(targetPlayer)
-                    local tChar = targetPlayer.Character
-                    if not tChar then return nil end
-                    local tHum = tChar:FindFirstChild("Humanoid")
-                    local tHRP = tChar:FindFirstChild("HumanoidRootPart")
-                    if not tHum or tHum.Health <= 0 then return nil end
-                    return {tChar, tHum, tHRP}
-                end
-            end
-        end
+        ExpandAll()
     else
         StatusLabel.Text       = "Status:  OFF"
         StatusLabel.TextColor3 = Color3.fromRGB(200, 70, 70)
@@ -285,6 +268,7 @@ local function SetState(on)
             BackgroundColor3 = Color3.fromRGB(40, 40, 58)
         }):Play()
         BtnStroke.Color = Color3.fromRGB(100, 100, 140)
+        RestoreAll()
     end
 end
 
@@ -292,72 +276,27 @@ ToggleBtn.MouseButton1Click:Connect(function()
     SetState(not Cfg.Enabled)
 end)
 
--- ── TOOL ─────────────────────────────────────────────────────────────────────
+-- ── KEEPALIVE — переприменяем если хитбокс сбросился ────────────────────────
 
-local function GetMeleeTool()
-    if not Char then return nil end
-    for _, obj in ipairs(Char:GetChildren()) do
-        if obj:IsA("Tool") then
-            local ranged = obj:FindFirstChild("ShootEvent")
-                or obj:FindFirstChild("BulletEvent")
-                or obj:FindFirstChild("FireRemote")
-            if not ranged then return obj end
-        end
-    end
-    return nil
-end
-
--- ── ATTACK ───────────────────────────────────────────────────────────────────
-
-local function Attack(tool, target)
-    local tChar = target.Character
-    if not tChar then return end
-    local tHum = tChar:FindFirstChild("Humanoid")
-    if not tHum or tHum.Health <= 0 then return end
-
-    -- анимация swing (только визуал, не двигает персонажа)
-    pcall(function() tool:Activate() end)
-
-    -- 1. captured remote — самый надёжный путь
-    if capturedRemote and capturedBuilder then
-        local args = capturedBuilder(target)
-        if args then
-            pcall(function() capturedRemote:FireServer(table.unpack(args)) end)
-        end
-        return
-    end
-
-    -- 2. fallback: все remotes в tool с популярными сигнатурами
-    for _, re in ipairs(tool:GetDescendants()) do
-        if re:IsA("RemoteEvent") then
-            pcall(function() re:FireServer(tChar) end)
-            pcall(function() re:FireServer(tHum) end)
-            pcall(function() re:FireServer(tChar, tHum) end)
-            pcall(function() re:FireServer(tHum, tChar) end)
-        end
-        if re:IsA("RemoteFunction") then
-            pcall(function() re:InvokeServer(tChar) end)
-        end
-    end
-end
-
--- ── MAIN LOOP ────────────────────────────────────────────────────────────────
-
-task.spawn(function()
-    while true do
-        task.wait(Cfg.Delay)
-        if Cfg.Enabled and Char then
-            local myHum = Char:FindFirstChild("Humanoid")
-            if myHum and myHum.Health > 0 then
-                local tool = GetMeleeTool()
-                if tool then
-                    for _, plr in ipairs(Players:GetPlayers()) do
-                        if plr ~= LP then
-                            pcall(Attack, tool, plr)
-                        end
-                    end
+RunService.Heartbeat:Connect(function()
+    if not Cfg.Enabled then return end
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LP then
+            local char = plr.Character
+            if char then
+                local hrp = char:FindFirstChild("HumanoidRootPart")
+                if hrp and hrp.Size.X < Cfg.HitboxSize - 1 then
+                    -- хитбокс сбросился (respawn/reset) — расширяем снова
+                    originals[plr] = nil
+                    pcall(ExpandPlayer, plr)
                 end
             end
         end
     end
 end)
+
+end)
+
+if not ok then
+    warn("[KillAura v9] error: " .. tostring(err))
+end
