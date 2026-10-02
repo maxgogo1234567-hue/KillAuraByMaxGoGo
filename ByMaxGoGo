@@ -1,9 +1,10 @@
--- language: Lua, file: KillAura_v4.lua, target: Synapse X / KRNL / Fluxus / Solara
--- firetouchinterest — реальный server-side touch без телепорта
+-- language: Lua, file: KillAura_v5.lua, target: Synapse X / KRNL / Fluxus / Solara
+-- camera-locked teleport: сервер видит тебя рядом, визуально ты не двигаешься
 
 local Players      = game:GetService("Players")
 local RunService   = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
+local Camera       = workspace.CurrentCamera
 
 local LP   = Players.LocalPlayer
 local PGui = LP:WaitForChild("PlayerGui")
@@ -83,7 +84,7 @@ local InfoLabel = Instance.new("TextLabel")
 InfoLabel.Size                   = UDim2.new(1, -20, 0, 20)
 InfoLabel.Position               = UDim2.new(0, 10, 0, 72)
 InfoLabel.BackgroundTransparency = 1
-InfoLabel.Text                   = "Mode:  Server Touch"
+InfoLabel.Text                   = "Mode:  Ghost Step"
 InfoLabel.TextColor3             = Color3.fromRGB(130, 130, 160)
 InfoLabel.Font                   = Enum.Font.Gotham
 InfoLabel.TextSize               = 12
@@ -164,7 +165,7 @@ ToggleBtn.MouseButton1Click:Connect(function()
     SetState(not Cfg.Enabled)
 end)
 
--- ── TOOL UTILS ───────────────────────────────────────────────────────────────
+-- ── TOOL ─────────────────────────────────────────────────────────────────────
 
 local function GetMeleeTool()
     if not Char then return nil end
@@ -179,55 +180,66 @@ local function GetMeleeTool()
     return nil
 end
 
-local function GetBlade(tool)
-    return tool:FindFirstChild("Handle")
-        or tool:FindFirstChildWhichIsA("BasePart")
-end
+-- ── ATTACK — camera-locked ghost step ────────────────────────────────────────
+--
+-- 1. Фиксируем камеру (Scriptable) — игрок не видит телепорт
+-- 2. HRP.CFrame → рядом с целью (сервер это видит и регистрирует proximity)
+-- 3. tool:Activate() → hit detection игры срабатывает, урон реальный
+-- 4. task.wait() — один physics step, сервер обработал
+-- 5. HRP.CFrame → обратно на место
+-- 6. Камера → Custom обратно
+--
 
--- ── ATTACK — firetouchinterest ────────────────────────────────────────────────
---
--- firetouchinterest(part_a, part_b, 0) — сервер получает Touched между part_a и part_b
--- firetouchinterest(part_a, part_b, 1) — TouchEnded
--- Это executor API (Synapse/KRNL/Fluxus) — реально реплицирует touch на сервер.
--- Никакого движения персонажа, никакого визуального артефакта.
---
+local busy = false
 
 local function Attack(tool, target)
+    if busy then return end
     local tChar = target.Character
     if not tChar then return end
     local tHum = tChar:FindFirstChild("Humanoid")
-    if not tHum or tHum.Health <= 0 then return end
+    local tHRP = tChar:FindFirstChild("HumanoidRootPart")
+    if not tHum or tHum.Health <= 0 or not tHRP or not HRP then return end
 
-    local blade = GetBlade(tool)
-    if not blade then return end
+    busy = true
 
-    -- активируем анимацию swing
+    local savedPos    = HRP.CFrame
+    local savedCamCF  = Camera.CFrame
+    local savedCamType = Camera.CameraType
+
+    -- заморозить камеру — игрок не увидит телепорт
+    Camera.CameraType = Enum.CameraType.Scriptable
+    Camera.CFrame     = savedCamCF
+
+    -- переместить HRP к цели (сервер видит)
+    HRP.CFrame = tHRP.CFrame * CFrame.new(0, 0, -2.2)
+
+    -- активировать tool — игра регистрирует hit
     pcall(function() tool:Activate() end)
 
-    -- firetouchinterest по каждой части тела цели
-    for _, part in ipairs(tChar:GetChildren()) do
-        if part:IsA("BasePart") then
-            pcall(function()
-                firetouchinterest(blade, part, 0)  -- Touched
-            end)
-            pcall(function()
-                firetouchinterest(blade, part, 1)  -- TouchEnded
-            end)
-        end
-    end
-
-    -- remote fallback для игр с RemoteEvent-based damage
+    -- remote fallback на случай remote-based damage
     for _, re in ipairs(tool:GetDescendants()) do
         if re:IsA("RemoteEvent") then
             pcall(function() re:FireServer(tChar) end)
             pcall(function() re:FireServer(tHum) end)
-            pcall(function() re:FireServer(tHum, tChar) end)
         end
         if re:IsA("RemoteFunction") then
             pcall(function() re:InvokeServer(tChar) end)
         end
     end
-    -- НЕТ TakeDamage — он только визуальный на клиенте
+
+    -- один physics step
+    task.wait()
+
+    -- вернуть на место
+    HRP.CFrame = savedPos
+
+    -- восстановить камеру
+    Camera.CameraType = savedCamType
+    if savedCamType == Enum.CameraType.Scriptable then
+        Camera.CFrame = savedCamCF
+    end
+
+    busy = false
 end
 
 -- ── MAIN LOOP ────────────────────────────────────────────────────────────────
