@@ -1,20 +1,22 @@
--- language: Lua, file: KillAura_v5.lua, target: Synapse X / KRNL / Fluxus / Solara
--- camera-locked teleport: сервер видит тебя рядом, визуально ты не двигаешься
+-- language: Lua, file: KillAura_v6.lua, target: Synapse X / KRNL / Fluxus / Solara
+-- hookmetamethod __namecall — перехват damage remote при первом ударе, replay на всех
 
 local Players      = game:GetService("Players")
 local RunService   = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
-local Camera       = workspace.CurrentCamera
 
 local LP   = Players.LocalPlayer
 local PGui = LP:WaitForChild("PlayerGui")
 
 local Cfg = {
-    Delay   = 0.1,
+    Delay   = 0.12,
     Enabled = false,
 }
 
 local Char, HRP
+local capturedRemote  = nil   -- RemoteEvent пойманный при ударе
+local capturedBuilder = nil   -- function(targetPlayer) → {args}
+local hookActive      = false
 
 local function RefreshChar(c)
     Char = c
@@ -22,6 +24,95 @@ local function RefreshChar(c)
 end
 if LP.Character then RefreshChar(LP.Character) end
 LP.CharacterAdded:Connect(RefreshChar)
+
+-- ── ARG BUILDER ──────────────────────────────────────────────────────────────
+-- строит таблицу аргументов для нового target
+-- заменяет любой Instance из вражеского Character на соответствующий из target
+
+local function MakeBuilder(originalArgs, sourceChar)
+    return function(targetPlayer)
+        local tChar = targetPlayer.Character
+        if not tChar then return nil end
+        local tHum = tChar:FindFirstChild("Humanoid")
+        local tHRP = tChar:FindFirstChild("HumanoidRootPart")
+        if not tHum or tHum.Health <= 0 or not tHRP then return nil end
+
+        local built = {}
+        for i, v in ipairs(originalArgs) do
+            local t = typeof(v)
+            if t == "Instance" then
+                if v == sourceChar then
+                    built[i] = tChar
+                elseif v.Parent == sourceChar then
+                    built[i] = tChar:FindFirstChild(v.Name) or tHRP
+                else
+                    built[i] = v
+                end
+            elseif t == "Vector3" then
+                built[i] = tHRP.Position
+            elseif t == "CFrame" then
+                built[i] = tHRP.CFrame
+            else
+                built[i] = v
+            end
+        end
+        return built
+    end
+end
+
+-- ── HOOKMETAMETHOD — перехват FireServer ──────────────────────────────────────
+-- срабатывает при каждом RemoteEvent:FireServer в игре
+-- ищет в args Instance принадлежащую enemy Character → это damage remote
+
+pcall(function()
+    local oldNamecall
+    oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+        local method = getnamecallmethod()
+
+        if method == "FireServer" and self:IsA("RemoteEvent") then
+            local args = {...}
+            for _, v in ipairs(args) do
+                if typeof(v) == "Instance" then
+                    for _, plr in ipairs(Players:GetPlayers()) do
+                        if plr ~= LP and plr.Character then
+                            if v == plr.Character or v.Parent == plr.Character then
+                                -- поймали damage remote
+                                capturedRemote  = self
+                                capturedBuilder = MakeBuilder(args, plr.Character)
+                                hookActive      = true
+                                break
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        return oldNamecall(self, ...)
+    end)
+end)
+
+-- ── FALLBACK — поиск damage remote по имени ───────────────────────────────────
+-- используется если hookmetamethod не поддерживается executor'ом
+
+local function FindRemoteByKeyword()
+    local kw = {
+        "damage","hit","attack","strike","hurt","slash",
+        "stab","sword","knife","melee","swing","smash"
+    }
+    local function scan(root)
+        for _, obj in ipairs(root:GetDescendants()) do
+            if obj:IsA("RemoteEvent") then
+                local name = obj.Name:lower()
+                for _, k in ipairs(kw) do
+                    if name:find(k) then return obj end
+                end
+            end
+        end
+    end
+    return scan(game:GetService("ReplicatedStorage"))
+        or scan(workspace)
+end
 
 -- ── GUI ──────────────────────────────────────────────────────────────────────
 
@@ -33,7 +124,7 @@ SG.IgnoreGuiInset  = true
 SG.Parent          = PGui
 
 local Frame = Instance.new("Frame")
-Frame.Size             = UDim2.new(0, 230, 0, 140)
+Frame.Size             = UDim2.new(0, 230, 0, 155)
 Frame.Position         = UDim2.new(0.5, -115, 0.35, 0)
 Frame.BackgroundColor3 = Color3.fromRGB(14, 14, 22)
 Frame.BorderSizePixel  = 0
@@ -80,20 +171,32 @@ StatusLabel.TextSize               = 13
 StatusLabel.TextXAlignment         = Enum.TextXAlignment.Left
 StatusLabel.Parent                 = Frame
 
-local InfoLabel = Instance.new("TextLabel")
-InfoLabel.Size                   = UDim2.new(1, -20, 0, 20)
-InfoLabel.Position               = UDim2.new(0, 10, 0, 72)
-InfoLabel.BackgroundTransparency = 1
-InfoLabel.Text                   = "Mode:  Ghost Step"
-InfoLabel.TextColor3             = Color3.fromRGB(130, 130, 160)
-InfoLabel.Font                   = Enum.Font.Gotham
-InfoLabel.TextSize               = 12
-InfoLabel.TextXAlignment         = Enum.TextXAlignment.Left
-InfoLabel.Parent                 = Frame
+-- статус захвата remote
+local CaptureLabel = Instance.new("TextLabel")
+CaptureLabel.Size                   = UDim2.new(1, -20, 0, 18)
+CaptureLabel.Position               = UDim2.new(0, 10, 0, 72)
+CaptureLabel.BackgroundTransparency = 1
+CaptureLabel.Text                   = "Hook:  ожидает удара..."
+CaptureLabel.TextColor3             = Color3.fromRGB(160, 130, 50)
+CaptureLabel.Font                   = Enum.Font.Gotham
+CaptureLabel.TextSize               = 11
+CaptureLabel.TextXAlignment         = Enum.TextXAlignment.Left
+CaptureLabel.Parent                 = Frame
+
+local ModeLabel = Instance.new("TextLabel")
+ModeLabel.Size                   = UDim2.new(1, -20, 0, 16)
+ModeLabel.Position               = UDim2.new(0, 10, 0, 92)
+ModeLabel.BackgroundTransparency = 1
+ModeLabel.Text                   = "Mode:  Remote Capture"
+ModeLabel.TextColor3             = Color3.fromRGB(130, 130, 160)
+ModeLabel.Font                   = Enum.Font.Gotham
+ModeLabel.TextSize               = 11
+ModeLabel.TextXAlignment         = Enum.TextXAlignment.Left
+ModeLabel.Parent                 = Frame
 
 local ToggleBtn = Instance.new("TextButton")
 ToggleBtn.Size             = UDim2.new(0, 190, 0, 36)
-ToggleBtn.Position         = UDim2.new(0.5, -95, 0, 96)
+ToggleBtn.Position         = UDim2.new(0.5, -95, 0, 112)
 ToggleBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 58)
 ToggleBtn.BorderSizePixel  = 0
 ToggleBtn.Text             = "Enable"
@@ -110,8 +213,8 @@ BtnStroke.Thickness = 1
 -- ── WATERMARK ────────────────────────────────────────────────────────────────
 
 local WMFrame = Instance.new("Frame")
-WMFrame.Size                   = UDim2.new(0, 210, 0, 28)
-WMFrame.Position               = UDim2.new(1, -218, 1, -34)
+WMFrame.Size                   = UDim2.new(0, 200, 0, 28)
+WMFrame.Position               = UDim2.new(1, -208, 1, -34)
 WMFrame.BackgroundColor3       = Color3.fromRGB(10, 10, 18)
 WMFrame.BackgroundTransparency = 0.3
 WMFrame.BorderSizePixel        = 0
@@ -125,140 +228,7 @@ WMStroke.Thickness = 1.2
 local Watermark = Instance.new("TextLabel")
 Watermark.Size                   = UDim2.new(1, 0, 1, 0)
 Watermark.BackgroundTransparency = 1
-Watermark.Text                   = "MadeBy:MaxGoGo]"
+Watermark.Text                   = "MadeBy:MaxGoGo"
 Watermark.Font                   = Enum.Font.GothamBold
 Watermark.TextSize               = 13
-Watermark.TextXAlignment         = Enum.TextXAlignment.Center
-Watermark.ZIndex                 = 11
-Watermark.Parent                 = WMFrame
-
-RunService.Heartbeat:Connect(function()
-    local col = Color3.fromHSV((tick() * 0.3) % 1, 1, 1)
-    Watermark.TextColor3 = col
-    WMStroke.Color       = col
-end)
-
--- ── TOGGLE ───────────────────────────────────────────────────────────────────
-
-local function SetState(on)
-    Cfg.Enabled = on
-    if on then
-        StatusLabel.Text       = "Status:  ON"
-        StatusLabel.TextColor3 = Color3.fromRGB(80, 220, 100)
-        ToggleBtn.Text         = "Disable"
-        TweenService:Create(ToggleBtn, TweenInfo.new(0.15), {
-            BackgroundColor3 = Color3.fromRGB(50, 180, 80)
-        }):Play()
-        BtnStroke.Color = Color3.fromRGB(50, 180, 80)
-    else
-        StatusLabel.Text       = "Status:  OFF"
-        StatusLabel.TextColor3 = Color3.fromRGB(200, 70, 70)
-        ToggleBtn.Text         = "Enable"
-        TweenService:Create(ToggleBtn, TweenInfo.new(0.15), {
-            BackgroundColor3 = Color3.fromRGB(40, 40, 58)
-        }):Play()
-        BtnStroke.Color = Color3.fromRGB(100, 100, 140)
-    end
-end
-
-ToggleBtn.MouseButton1Click:Connect(function()
-    SetState(not Cfg.Enabled)
-end)
-
--- ── TOOL ─────────────────────────────────────────────────────────────────────
-
-local function GetMeleeTool()
-    if not Char then return nil end
-    for _, obj in ipairs(Char:GetChildren()) do
-        if obj:IsA("Tool") then
-            local ranged = obj:FindFirstChild("ShootEvent")
-                or obj:FindFirstChild("BulletEvent")
-                or obj:FindFirstChild("FireRemote")
-            if not ranged then return obj end
-        end
-    end
-    return nil
-end
-
--- ── ATTACK — camera-locked ghost step ────────────────────────────────────────
---
--- 1. Фиксируем камеру (Scriptable) — игрок не видит телепорт
--- 2. HRP.CFrame → рядом с целью (сервер это видит и регистрирует proximity)
--- 3. tool:Activate() → hit detection игры срабатывает, урон реальный
--- 4. task.wait() — один physics step, сервер обработал
--- 5. HRP.CFrame → обратно на место
--- 6. Камера → Custom обратно
---
-
-local busy = false
-
-local function Attack(tool, target)
-    if busy then return end
-    local tChar = target.Character
-    if not tChar then return end
-    local tHum = tChar:FindFirstChild("Humanoid")
-    local tHRP = tChar:FindFirstChild("HumanoidRootPart")
-    if not tHum or tHum.Health <= 0 or not tHRP or not HRP then return end
-
-    busy = true
-
-    local savedPos    = HRP.CFrame
-    local savedCamCF  = Camera.CFrame
-    local savedCamType = Camera.CameraType
-
-    -- заморозить камеру — игрок не увидит телепорт
-    Camera.CameraType = Enum.CameraType.Scriptable
-    Camera.CFrame     = savedCamCF
-
-    -- переместить HRP к цели (сервер видит)
-    HRP.CFrame = tHRP.CFrame * CFrame.new(0, 0, -2.2)
-
-    -- активировать tool — игра регистрирует hit
-    pcall(function() tool:Activate() end)
-
-    -- remote fallback на случай remote-based damage
-    for _, re in ipairs(tool:GetDescendants()) do
-        if re:IsA("RemoteEvent") then
-            pcall(function() re:FireServer(tChar) end)
-            pcall(function() re:FireServer(tHum) end)
-        end
-        if re:IsA("RemoteFunction") then
-            pcall(function() re:InvokeServer(tChar) end)
-        end
-    end
-
-    -- один physics step
-    task.wait()
-
-    -- вернуть на место
-    HRP.CFrame = savedPos
-
-    -- восстановить камеру
-    Camera.CameraType = savedCamType
-    if savedCamType == Enum.CameraType.Scriptable then
-        Camera.CFrame = savedCamCF
-    end
-
-    busy = false
-end
-
--- ── MAIN LOOP ────────────────────────────────────────────────────────────────
-
-task.spawn(function()
-    while true do
-        task.wait(Cfg.Delay)
-        if Cfg.Enabled and Char then
-            local myHum = Char:FindFirstChild("Humanoid")
-            if myHum and myHum.Health > 0 then
-                local tool = GetMeleeTool()
-                if tool then
-                    for _, plr in ipairs(Players:GetPlayers()) do
-                        if plr ~= LP then
-                            pcall(Attack, tool, plr)
-                        end
-                    end
-                end
-            end
-        end
-    end
-end)
+Watermark.TextXAlignment
